@@ -111,8 +111,8 @@ class FlowClassifierDbPlugin(fc_ext.FlowClassifierPluginBase,
 
     @classmethod
     def _logical_port_conflict(cls, first_logical_port, second_logical_port):
-        if first_logical_port is None or second_logical_port is None:
-            return True
+        '''if first_logical_port is None or second_logical_port is None:
+            return True'''
         return first_logical_port == second_logical_port
 
     @classmethod

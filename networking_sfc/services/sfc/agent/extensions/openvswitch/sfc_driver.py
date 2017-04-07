@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+
 from neutron_lib import constants as n_consts
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -95,8 +97,10 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         try:
             if flowrule.get('egress', None):
                 self._setup_egress_flow_rules(flowrule)
+                self._setup_reverse_ingress_flow_rules(flowrule)
             if flowrule.get('ingress', None):
                 self._setup_ingress_flow_rules_with_mpls(flowrule)
+                self._setup_reverse_egress_flow_rules(flowrule)
 
             flowrule_status_temp = {}
             flowrule_status_temp['id'] = flowrule['id']
@@ -115,6 +119,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
             LOG.debug("delete_flow_rule, flowrule = %s",
                       flowrule)
 
+            node_type = flowrule['node_type']
             # delete tunnel table flow rule on br-int(egress match)
             if flowrule['egress'] is not None:
                 self._setup_local_switch_flows_on_int_br(
@@ -124,6 +129,8 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                     add_flow=False,
                     match_inport=True
                 )
+                self._setup_source_based_flows(
+                    flowrule, flowrule['del_fcs'], add_flow=False)
                 # delete group table, need to check again
                 group_id = flowrule.get('next_group_id', None)
                 if group_id and flowrule.get('group_refcnt', None) <= 1:
@@ -134,6 +141,9 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                             dl_dst=item['mac_address'])
 
             if flowrule['ingress'] is not None:
+                self._setup_destination_based_forwarding(flowrule,
+                                                         flowrule['del_fcs'],
+                                                         add_flow=False)
                 # delete table INGRESS_TABLE ingress match flow rule
                 # on br-int(ingress match)
                 vif_port = self.br_int.get_vif_port_by_id(flowrule['ingress'])
@@ -146,6 +156,16 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                         dl_dst=vif_port.vif_mac,
                         mpls_label=flowrule['nsp'] << 8 | (flowrule['nsi'] + 1)
                     )
+            if node_type in ['bi_node', 'sf_bi_node']:
+                rev_flowrule = self._reverse_flow_rules(
+                                    flowrule, flowrule['node_type'])
+                if flowrule['ingress'] is not None:
+                    self._setup_source_based_flows(
+                        rev_flowrule, rev_flowrule['del_fcs'], add_flow=False)
+                else:
+                    self._setup_destination_based_forwarding(
+                            rev_flowrule, rev_flowrule['del_fcs'],
+                            add_flow=False)
         except Exception as e:
             flowrule_status_temp = {}
             flowrule_status_temp['id'] = flowrule['id']
@@ -154,9 +174,46 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
             LOG.exception(e)
             LOG.error(_LE("delete_flow_rule failed"))
 
+    def _reverse_flow_rules(self, flowrule, node_type):
+        rev_flowrule = copy.deepcopy(flowrule)
+
+        def _reverse_fcs(op):
+            for fc in rev_flowrule[op]:
+                fc['logical_destination_port'], fc['logical_source_port'] = (
+                    fc['logical_source_port'], fc['logical_destination_port'])
+                fc['ldp_mac_address'], fc['lsp_mac_address'] = (
+                    fc['lsp_mac_address'], fc['ldp_mac_address'])
+                fc['destination_ip_prefix'], fc['source_ip_prefix'] = (
+                    fc['source_ip_prefix'], fc['destination_ip_prefix'])
+
+        for op in ['add_fcs', 'del_fcs']:
+            _reverse_fcs(op)
+
+        if node_type == 'bi_node':
+            rev_flowrule['ingress'], rev_flowrule['egress'] = (
+                        rev_flowrule['egress'], rev_flowrule['ingress'])
+
+        return rev_flowrule
+
+    def _setup_reverse_ingress_flow_rules(self, flowrule):
+        node_type = flowrule['node_type']
+        if node_type not in ['bi_node', 'sf_bi_node']:
+            return
+        rev_flowrule = self._reverse_flow_rules(flowrule, node_type)
+        self._setup_ingress_flow_rules_with_mpls(rev_flowrule)
+
+    def _setup_reverse_egress_flow_rules(self, flowrule):
+        node_type = flowrule['node_type']
+        if node_type not in ['bi_node', 'sf_bi_node']:
+            return
+        rev_flowrule = self._reverse_flow_rules(flowrule, node_type)
+        self._setup_egress_flow_rules(rev_flowrule)
+
     def _clear_sfc_flow_on_int_br(self):
         self.br_int.delete_group(group_id='all')
         self.br_int.delete_flows(table=ACROSS_SUBNET_TABLE)
+        self.br_int.delete_flows(table=11)
+        self.br_int.delete_flows(table=12)
         self.br_int.delete_flows(table=INGRESS_TABLE)
         self.br_int.install_goto(dest_table_id=INGRESS_TABLE,
                                  priority=PC_DEF_PRI,
@@ -321,6 +378,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
             # and group table
             buckets = []
             vlan = self._get_vlan_by_port(flowrule['egress'])
+            # A2 Group Creation
             for item in next_hops:
                 bucket = (
                     'bucket=weight=%d, mod_dl_dst:%s,'
@@ -331,6 +389,8 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                     )
                 )
                 buckets.append(bucket)
+                # A3 In table 5, add MPLS header and send to either patch port
+                # or table 10 for remote and local node respectively.
                 subnet_actions_list = []
                 push_mpls = (
                     "push_mpls:0x8847,"
@@ -341,6 +401,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                      flowrule['nsi'], vlan))
                 subnet_actions_list.append(push_mpls)
 
+                priority = 0
                 if item['local_endpoint'] == self.local_ip:
                     subnet_actions = (
                         "resubmit(,%d)" % INGRESS_TABLE)
@@ -351,10 +412,36 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
 
                 self.br_int.add_flow(
                     table=ACROSS_SUBNET_TABLE,
-                    priority=0,
+                    priority=priority,
                     dl_dst=item['mac_address'],
                     dl_type=0x0800,
                     actions="%s" % ','.join(subnet_actions_list))
+
+                #  Same subnet with next hop BUT to prevent hair pinning
+                if item['local_endpoint'] != self.local_ip:
+                    subnet_actions_list = []
+                    push_mpls = (
+                        "strip_vlan,"
+                        "push_mpls:0x8847,"
+                        "set_mpls_label:%d,"
+                        "set_mpls_ttl:%d,"
+                        "mod_vlan_vid:%d," %
+                        ((flowrule['nsp'] << 8) | flowrule['nsi'],
+                         flowrule['nsi'], vlan))
+                    subnet_actions_list.append(push_mpls)
+
+                    priority = 10
+                    subnet_actions = "in_port"
+                    subnet_actions_list.append(subnet_actions)
+
+                    self.br_int.add_flow(
+                        table=ACROSS_SUBNET_TABLE,
+                        priority=priority,
+                        in_port=self.patch_tun_ofport,
+                        vlan_tci='0x1000/0x1000',
+                        dl_dst=item['mac_address'],
+                        dl_type=0x0800,
+                        actions="%s" % ','.join(subnet_actions_list))
 
             buckets = ','.join(buckets)
             group_content = self.br_int.dump_group_for_id(group_id)
@@ -365,7 +452,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 self.br_int.mod_group(group_id=group_id,
                                       type='select', buckets=buckets)
 
-            # 2nd, install br-int flow rule on table 0  for egress traffic
+            '''# 2nd, install br-int flow rule on table 0  for egress traffic
             # for egress traffic
             enc_actions = ("group:%d" % group_id)
             # to uninstall the removed flow classifiers
@@ -376,14 +463,16 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 add_flow=False,
                 match_inport=match_inport)
             # to install the added flow classifiers
+            # This is for packets coming out of Src VM
             self._setup_local_switch_flows_on_int_br(
                 flowrule,
                 flowrule['add_fcs'],
                 enc_actions,
                 add_flow=True,
-                match_inport=match_inport)
+                match_inport=match_inport)'''
         else:
-            # to uninstall the new removed flow classifiers
+            pass
+            '''# to uninstall the new removed flow classifiers
             self._setup_local_switch_flows_on_int_br(
                 flowrule,
                 flowrule['del_fcs'],
@@ -393,12 +482,123 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
             )
 
             # to install the added flow classifiers
+            # This is for packets coming out of SF egress
             self._setup_local_switch_flows_on_int_br(
                 flowrule,
                 flowrule['add_fcs'],
                 actions='normal',
                 add_flow=True,
-                match_inport=True)
+                match_inport=True)'''
+        self._setup_source_based_flows(
+            flowrule,
+            flowrule['add_fcs'],
+            add_flow=True,
+            match_inport=True)
+
+    def _update_flows(self, table, priority,
+                      match_info, actions=None, add_flow=True):
+        if add_flow:
+            self.br_int.add_flow(table=table,
+                                 priority=priority,
+                                 actions=actions,
+                                 **match_info)
+        else:
+            self.br_int.delete_flows(table=table,
+                                     priority=priority,
+                                     **match_info)
+
+    def _check_if_local_port(self, port_id):
+        try:
+            if self.br_int.get_vif_port_by_id(port_id):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _setup_source_based_flows(
+        self, flowrule, flow_classifier_list,
+        add_flow=True, match_inport=True
+    ):
+        inport_match = {}
+        priority = 50
+        vlan_tag = flowrule['segment_id']
+
+        if match_inport is True:
+            egress_port = self.br_int.get_vif_port_by_id(flowrule['egress'])
+            if egress_port:
+                inport_match = dict(in_port=egress_port.ofport)
+
+        group_id = flowrule.get('next_group_id')
+        next_hops = flowrule.get('next_hops')
+        if not (group_id and next_hops):
+            egress_mac = egress_port.vif_mac
+            # B6. For packets coming out of SF, we resubmit to table 12.
+            match_info = dict(dl_type=0x0800, **inport_match)
+            actions = ("resubmit(,%s)" % 12)
+
+            self._update_flows(ovs_consts.LOCAL_SWITCHING, 60,
+                               match_info, actions, add_flow)
+
+            # B7 In table 12, we decide whether to send it locally or remotely.
+            for fc in flow_classifier_list:
+                ldp_port_id = fc['logical_destination_port']
+                ldp_mac = fc['ldp_mac_address']
+
+                if self._check_if_local_port(ldp_port_id):
+                    actions = ("normal")
+                else:
+                    # TODO(dpak): Uncomment the following once we have a
+                    # vlan enabled setup
+                    '''actions = ("mod_dl_src:%s, output:%s" % (
+                                        egress_mac, self.patch_tun_ofport))'''
+                    actions = ("mod_vlan_vid:1, mod_dl_src:%s, output:%s" % (
+                                        egress_mac, self.patch_tun_ofport))
+
+                # TODO(dpak): Uncomment the following once we have a
+                # vlan enabled setup
+                '''match_info = dict(dl_dst=ldp_mac,
+                                  dl_type=0x0800,
+                                  dl_vlan=vlan_tag)'''
+                match_info = dict(dl_dst=ldp_mac,
+                                  dl_type=0x0800)
+                self._update_flows(12, priority,
+                                   match_info, actions, add_flow)
+            return
+
+        # A1. Flow inserted at LSP egress. Matches on ip, in_port and LDP IP.
+        # Action is redirect to group.
+        ldp_mac = flow_classifier_list[0]['ldp_mac_address']
+        actions = ("group:%d" % group_id)
+        # TODO(dpak): Uncomment the following once we have a vlan enabled setup
+        '''match_info = dict(inport_match, **{'dl_dst': ldp_mac,
+                                           'dl_type': '0x0800',
+                                           'dl_vlan': vlan_tag})'''
+        match_info = dict(inport_match, **{'dl_dst': ldp_mac,
+                                           'dl_type': '0x0800'})
+        self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
+                           match_info, actions, add_flow)
+
+    def _get_port_info(self, port_id, info_type):
+        ''' Returns specific port info
+
+        @param port_id: Neutron port id
+        @param info_type: Type is List [mac,ofport,vlan]
+        @return: Tuple (MAC address, openflow port number)
+
+        '''
+
+        res = ()
+        port = self.br_int.get_vif_port_by_id(port_id)
+
+        port_type_map = {
+            'mac': port.vif_mac,
+            'ofport': port.ofport,
+            'vlan': self._get_vlan_by_port(port_id)}
+
+        for each in info_type:
+            res += (port_type_map[each],)
+
+        return res
 
     def _get_vlan_by_port(self, port_id):
         try:
@@ -407,8 +607,100 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         except (vlanmanager.VifIdNotFound, vlanmanager.MappingNotFound):
             return None
 
+    def _setup_destination_based_forwarding(self, flowrule,
+                                            flow_classifier_list,
+                                            add_flow=True):
+        priority = 50
+        ingress_mac, ingress_ofport = self._get_port_info(
+                                flowrule['ingress'], ['mac', 'ofport'])
+        vlan_tag = flowrule['segment_id']
+
+        group_id = flowrule.get('next_group_id')
+        next_hops = flowrule.get('next_hops')
+        if not (group_id and next_hops):
+            # B5. At ingress of SF, modify dest mac to that of Dest VM's
+            # if nw_dst belongs to Dest VM and output to ingress port of SF.
+            for fc in flow_classifier_list:
+                ldp_mac = fc['ldp_mac_address']
+                dst_ip = fc['destination_ip_prefix']
+
+                # TODO(dpak): Uncomment the following once we have a
+                # vlan enabled setup
+                '''match_info = dict(dl_type=0x0800,
+                                  dl_vlan=vlan_tag,
+                                  dl_dst=ingress_mac,
+                                  nw_dst=dst_ip)'''
+                match_info = dict(dl_type=0x0800,
+                                  dl_vlan=1,
+                                  dl_dst=ingress_mac,
+                                  nw_dst=dst_ip)
+                actions = ("strip_vlan, mod_dl_dst:%s, output:%s" % (
+                                                    ldp_mac, ingress_ofport))
+                self._update_flows(11, 60,
+                                   match_info, actions, add_flow)
+
+                # B4. At ingress of SF, if dest mac matches with SF ingress,
+                # strip the mpls packet off mpls and resubmit to 11.
+                # This is per ldp because ldps can have different vlan tags.
+                # TODO(dpak): Uncomment the following once we have a
+                # vlan enabled setup
+                '''match_info = dict(
+                    dl_type=0x8847,
+                    dl_vlan=vlan_tag, dl_dst=ingress_mac,
+                    mpls_label=flowrule['nsp'] << 8 | (flowrule['nsi'] + 1))'''
+                match_info = dict(
+                    dl_type=0x8847,
+                    dl_dst=ingress_mac,
+                    mpls_label=flowrule['nsp'] << 8 | (flowrule['nsi'] + 1))
+                actions = ("pop_mpls:0x0800, resubmit(,11)")
+                self._update_flows(INGRESS_TABLE, priority,
+                                   match_info, actions, add_flow)
+            return
+
+        # B9. Match IP packets with vlan and source IP. Actions will be to
+        # strip vlan and modify src MAC and output to Dest VM port.
+        nw_src = flow_classifier_list[0]['source_ip_prefix']
+
+        src_port_mac = flow_classifier_list[0]['lsp_mac_address']
+        actions = ('strip_vlan, mod_dl_src:%s, output:%s' % (
+                                            src_port_mac, ingress_ofport))
+
+        # TODO(dpak): Uncomment the following once we have a vlan enabled setup
+        '''match_field = dict(
+            dl_type=0x0800,
+            dl_vlan=vlan_tag,
+            dl_dst=ingress_mac,
+            nw_src=nw_src)'''
+
+        match_field = dict(
+            dl_type=0x0800,
+            dl_vlan=1,
+            dl_dst=ingress_mac,
+            nw_src=nw_src)
+
+        self._update_flows(11, priority,
+                           match_field, actions, add_flow)
+
+        # B8. At ingress of dest, match ip packet with vlan tag and dest
+        # MAC address. Action will be to resubmit to 11.
+        # TODO(dpak): Uncomment the following once we have a vlan enabled setup
+        '''match_field = dict(
+            dl_type=0x0800,
+            dl_vlan=vlan_tag,
+            dl_dst=ingress_mac)'''
+        match_field = dict(
+            dl_type=0x0800,
+            dl_dst=ingress_mac)
+        actions = ("resubmit(,%s)" % 11)
+
+        self._update_flows(0, priority, match_field, actions, add_flow)
+
     def _setup_ingress_flow_rules_with_mpls(self, flowrule):
-        vif_port = self.br_int.get_vif_port_by_id(flowrule['ingress'])
+        flow_classifier_list = flowrule['add_fcs']
+        self._setup_destination_based_forwarding(flowrule,
+                                                 flow_classifier_list)
+
+        '''vif_port = self.br_int.get_vif_port_by_id(flowrule['ingress'])
         if vif_port:
             vlan = self._get_vlan_by_port(flowrule['ingress'])
             # install br-int flow rule on table 0 for ingress traffic
@@ -425,4 +717,4 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 mpls_label=flowrule['nsp'] << 8 | (flowrule['nsi'] + 1),
                 actions=actions)
 
-            self.br_int.add_flow(**match_field)
+            self.br_int.add_flow(**match_field)'''

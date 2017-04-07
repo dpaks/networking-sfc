@@ -261,31 +261,57 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                                        src_node):
         for fc in self._get_fcs_by_ids(fc_ids):
             need_assoc = True
-            # lookup the source port
-            src_pd_filter = dict(
-                egress=fc['logical_source_port'],
-                tenant_id=tenant_id
-            )
-            src_pd = self.get_port_detail_by_filter(src_pd_filter)
+            src_pd_filter = dst_pd_filter = None
 
-            if not src_pd:
-                # Create source port detail
-                src_pd = self._create_port_detail(src_pd_filter)
-                LOG.debug('create src port detail: %s', src_pd)
+            if fc['logical_source_port']:
+                # lookup the source port
+                src_pd_filter = dict(
+                    egress=fc['logical_source_port'],
+                    tenant_id=tenant_id
+                )
+            if fc['logical_destination_port']:
+                # lookup the source port
+                dst_pd_filter = dict(
+                    ingress=fc['logical_destination_port'],
+                    tenant_id=tenant_id
+                )
+            src_pd = self.get_port_detail_by_filter(src_pd_filter)
+            dst_pd = self.get_port_detail_by_filter(dst_pd_filter)
+
+            new_src_pd = new_dst_pd = ''
+            if not (src_pd and dst_pd):
+                if not src_pd:
+                    # Create source port detail
+                    new_src_pd = self._create_port_detail(src_pd_filter)
+                    LOG.debug('create src port detail: %s', new_src_pd)
+                if not dst_pd:
+                    # Create destination port detail
+                    new_dst_pd = self._create_port_detail(dst_pd_filter)
+                    LOG.debug('create dst port detail: %s', new_dst_pd)
             else:
                 for path_node in src_pd['path_nodes']:
                     if path_node['pathnode_id'] == src_node['id']:
                         need_assoc = False
             if need_assoc:
                 # Create associate relationship
-                assco_args = {
-                    'portpair_id': src_pd['id'],
-                    'pathnode_id': src_node['id'],
-                    'weight': 1,
-                }
-                sna = self.create_pathport_assoc(assco_args)
-                LOG.debug('create assoc src port with node: %s', sna)
-                src_node['portpair_details'].append(src_pd['id'])
+                if new_src_pd:
+                    assco_args = {
+                        'portpair_id': new_src_pd['id'],
+                        'pathnode_id': src_node['id'],
+                        'weight': 1,
+                    }
+                    sna = self.create_pathport_assoc(assco_args)
+                    LOG.debug('create assoc src port with node: %s', sna)
+                    src_node['portpair_details'].append(new_src_pd['id'])
+                if new_dst_pd:
+                    assco_args = {
+                        'portpair_id': new_dst_pd['id'],
+                        'pathnode_id': src_node['id'],
+                        'weight': 1,
+                    }
+                    sna = self.create_pathport_assoc(assco_args)
+                    LOG.debug('create assoc src port with node: %s', sna)
+                    src_node['portpair_details'].append(new_dst_pd['id'])
 
     def _remove_flowclassifier_port_assoc(self, fc_ids, tenant_id,
                                           src_node):
@@ -309,9 +335,64 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                         if len(pd['path_nodes']) == 1:
                             self.delete_port_detail(pd['id'])
 
+    def _create_src_and_dest_nodes(self, port_chain, next_group_intid,
+                                   next_group_members, path_nodes):
+        path_id = port_chain['chain_id']
+        port_pair_groups = port_chain['port_pair_groups']
+        sf_path_length = len(port_pair_groups)
+
+        # Create a head node object for port chain
+        src_args = {'tenant_id': port_chain['tenant_id'],
+                    'node_type': ovs_const.SRC_NODE,
+                    'nsp': path_id,
+                    'nsi': 0xff,
+                    'portchain_id': port_chain['id'],
+                    'status': ovs_const.STATUS_BUILDING,
+                    'next_group_id': next_group_intid,
+                    'next_hop': jsonutils.dumps(next_group_members),
+                    }
+        src_node = self.create_path_node(src_args)
+        LOG.debug('create src node: %s', src_node)
+        path_nodes.append(src_node)
+
+        # Create a destination node object for port chain
+        dst_args = {
+            'tenant_id': port_chain['tenant_id'],
+            'node_type': ovs_const.DST_NODE,
+            'nsp': path_id,
+            'nsi': 0xff - sf_path_length - 1,
+            'portchain_id': port_chain['id'],
+            'status': ovs_const.STATUS_BUILDING,
+            'next_group_id': None,
+            'next_hop': None
+        }
+        dst_node = self.create_path_node(dst_args)
+        LOG.debug('create dst node: %s', dst_node)
+        path_nodes.append(dst_node)
+
+        return src_node
+
+    def _check_if_bi_node(self, src_node):
+        ''' We assume that if the flow classifiers associated with
+        a port chain contain both LSP and LDP, we treat it as a bi-directional
+        chain. LSP and LDP can be part of same or different flow
+        classifier(s) '''
+
+        is_lsp = False
+        is_ldp = False
+        portpair_details = src_node['portpair_details']
+        for each in portpair_details:
+            port_detail = self.get_port_detail_by_filter(dict(id=each))
+            if port_detail['egress']:
+                is_lsp = True
+            else:
+                is_ldp = True
+            if is_lsp and is_ldp:
+                return True
+        return False
+
     @log_helpers.log_method_call
     def _create_portchain_path(self, context, port_chain):
-        src_node, src_pd, dst_node, dst_pd = (({}, ) * 4)
         path_nodes = []
         # Create an assoc object for chain_id and path_id
         # context = context._plugin_context
@@ -328,7 +409,11 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         # Compare subnets for logical source ports
         # and first PPG ingress ports
         for fc in self._get_fcs_by_ids(port_chain['flow_classifiers']):
-            subnet1 = self._get_subnet_by_port(fc['logical_source_port'])
+            if fc['logical_source_port']:
+                subnet1 = self._get_subnet_by_port(fc['logical_source_port'])
+            else:
+                subnet1 = self._get_subnet_by_port(fc[
+                                                'logical_destination_port'])
             cidr1 = subnet1['cidr']
             ppg = context._plugin.get_port_pair_group(context._plugin_context,
                                                       port_pair_groups[0])
@@ -380,40 +465,20 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         next_group_intid, next_group_members = self._get_portgroup_members(
             context, port_chain['port_pair_groups'][0])
 
-        # Create a head node object for port chain
-        src_args = {'tenant_id': port_chain['tenant_id'],
-                    'node_type': ovs_const.SRC_NODE,
-                    'nsp': path_id,
-                    'nsi': 0xff,
-                    'portchain_id': port_chain['id'],
-                    'status': ovs_const.STATUS_BUILDING,
-                    'next_group_id': next_group_intid,
-                    'next_hop': jsonutils.dumps(next_group_members),
-                    }
-        src_node = self.create_path_node(src_args)
-        LOG.debug('create src node: %s', src_node)
-        path_nodes.append(src_node)
-
-        # Create a destination node object for port chain
-        dst_args = {
-            'tenant_id': port_chain['tenant_id'],
-            'node_type': ovs_const.DST_NODE,
-            'nsp': path_id,
-            'nsi': 0xff - sf_path_length - 1,
-            'portchain_id': port_chain['id'],
-            'status': ovs_const.STATUS_BUILDING,
-            'next_group_id': None,
-            'next_hop': None
-        }
-        dst_node = self.create_path_node(dst_args)
-        LOG.debug('create dst node: %s', dst_node)
-        path_nodes.append(dst_node)
+        src_node = self._create_src_and_dest_nodes(
+                                        port_chain, next_group_intid,
+                                        next_group_members, path_nodes)
 
         self._add_flowclassifier_port_assoc(
             port_chain['flow_classifiers'],
             port_chain['tenant_id'],
             src_node
         )
+
+        is_bi_node = self._check_if_bi_node(src_node)
+
+        if is_bi_node:
+            path_nodes[0]['node_type'] = 'bi_node'
 
         for i in range(sf_path_length):
             cur_group_members = next_group_members
@@ -443,6 +508,8 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             }
             sf_node = self.create_path_node(node_args)
             LOG.debug('chain path node: %s', sf_node)
+
+            sf_node['node_type'] = 'sf_bi_node'
             # Create the assocation objects that combine the pathnode_id with
             # the ingress of the port_pairs in the current group
             # when port_group does not reach tail
@@ -487,10 +554,17 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         pds = self.get_path_nodes_by_filter(
             dict(portchain_id=port_chain['id']))
         src_node = None
+        is_bi_node = False
         if pds:
             for pd in pds:
                 if pd['node_type'] == ovs_const.SRC_NODE:
                     src_node = pd
+                    is_bi_node = self._check_if_bi_node(src_node)
+                    if is_bi_node:
+                        pd['node_type'] = 'bi_node'
+                # Assuming sf_node comes after src_node.
+                if is_bi_node and pd['node_type'] == ovs_const.SF_NODE:
+                    pd['node_type'] = 'sf_bi_node'
                 self._delete_path_node_flowrule(
                     pd,
                     port_chain['flow_classifiers']
@@ -519,6 +593,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                 dict(id=member['portpair_id']))
             if not port_detail or not port_detail['host_id']:
                 continue
+
             detail['local_endpoint'] = port_detail['local_endpoint']
             detail['weight'] = member['weight']
             detail['mac_address'] = port_detail['mac_address']
@@ -568,6 +643,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         """
 
         fc_return = []
+        core_plugin = manager.NeutronManager.get_plugin()
 
         if not fc_ids:
             return fc_return
@@ -579,12 +655,28 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             new_fc.pop('tenant_id')
             new_fc.pop('description')
 
+            lsp = new_fc.get('logical_source_port')
+            ldp = new_fc.get('logical_destination_port')
+            if lsp:
+                port_detail = core_plugin.get_port(self.admin_context, lsp)
+                new_fc['lsp_mac_address'] = port_detail['mac_address']
+                new_fc['source_ip_prefix'] = port_detail[
+                                            'fixed_ips'][0]['ip_address']
+            if ldp:
+                port_detail = core_plugin.get_port(self.admin_context, ldp)
+                new_fc['ldp_mac_address'] = port_detail['mac_address']
+                new_fc['destination_ip_prefix'] = port_detail[
+                                            'fixed_ips'][0]['ip_address']
+
             if (
-                flow_rule['node_type'] == ovs_const.SRC_NODE and
+                flow_rule['node_type'] in [ovs_const.SRC_NODE, 'bi_node'] and
                 flow_rule['egress'] == fc['logical_source_port']
+            ) or (
+                flow_rule['node_type'] in [ovs_const.SRC_NODE, 'bi_node'] and
+                flow_rule['ingress'] == fc['logical_destination_port']
             ):
                 fc_return.append(new_fc)
-            elif flow_rule['node_type'] == ovs_const.SF_NODE:
+            elif flow_rule['node_type'] in [ovs_const.SF_NODE, 'sf_bi_node']:
                 fc_return.append(new_fc)
 
         return fc_return
@@ -601,6 +693,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             add_fc_ids,
             del_fc_ids)
 
+        LOG.info("YYY FLOW RULES %r" % flow_rule)
         self.ovs_driver_rpc.ask_agent_to_update_flow_rules(
             self.admin_context,
             flow_rule)
@@ -649,6 +742,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
     def create_port_chain(self, context):
         port_chain = context.current
         path_nodes = self._create_portchain_path(context, port_chain)
+        LOG.info("XXX PATH NODES %r" % path_nodes)
         self._update_path_nodes(
             path_nodes,
             port_chain['flow_classifiers'],
