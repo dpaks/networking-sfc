@@ -539,7 +539,9 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 ldp_mac = fc['ldp_mac_address']
 
                 if self._check_if_local_port(ldp_port_id):
-                    actions = ("strip_vlan, normal")
+                    ldp_port = self.br_int.get_vif_port_by_id(ldp_port_id)
+                    ldp_ofport = ldp_port.ofport
+                    actions = ("strip_vlan, output:%s" % ldp_ofport)
                 else:
                     actions = ("mod_vlan_vid:%s, mod_dl_src:%s, output:%s" % (
                         local_vlan_tag, egress_mac, self.patch_tun_ofport))
