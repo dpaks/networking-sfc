@@ -478,7 +478,9 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         is_bi_node = self._check_if_bi_node(src_node)
 
         if is_bi_node:
-            path_nodes[0]['node_type'] = 'bi_node'
+            path_nodes[0].update(dict(reverse_path=True))
+        else:
+            path_nodes[0].update(dict(reverse_path=False))
 
         for i in range(sf_path_length):
             cur_group_members = next_group_members
@@ -509,7 +511,10 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             sf_node = self.create_path_node(node_args)
             LOG.debug('chain path node: %s', sf_node)
 
-            sf_node['node_type'] = 'sf_bi_node'
+            if is_bi_node:
+                sf_node.update(dict(reverse_path=True))
+            else:
+                sf_node.update(dict(reverse_path=False))
             # Create the assocation objects that combine the pathnode_id with
             # the ingress of the port_pairs in the current group
             # when port_group does not reach tail
@@ -534,6 +539,11 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             None,
             fc_ids)
 
+        if flow_rule['reverse_path']:
+            if (flow_rule['node_type'] == ovs_const.SRC_NODE and flow_rule[
+                                                                'ingress']):
+                flow_rule = self._reverse_flow_rules(flow_rule)
+
         self.ovs_driver_rpc.ask_agent_to_delete_flow_rules(
             self.admin_context,
             flow_rule)
@@ -557,14 +567,15 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         is_bi_node = False
         if pds:
             for pd in pds:
+                is_bi_node = self._check_if_bi_node(pd)
+                if is_bi_node:
+                    pd.update(dict(reverse_path=True))
+                else:
+                    pd.update(dict(reverse_path=False))
+
                 if pd['node_type'] == ovs_const.SRC_NODE:
                     src_node = pd
-                    is_bi_node = self._check_if_bi_node(src_node)
-                    if is_bi_node:
-                        pd['node_type'] = 'bi_node'
-                # Assuming sf_node comes after src_node.
-                if is_bi_node and pd['node_type'] == ovs_const.SF_NODE:
-                    pd['node_type'] = 'sf_bi_node'
+
                 self._delete_path_node_flowrule(
                     pd,
                     port_chain['flow_classifiers']
@@ -669,17 +680,36 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                                             'fixed_ips'][0]['ip_address']
 
             if (
-                flow_rule['node_type'] in [ovs_const.SRC_NODE, 'bi_node'] and
+                flow_rule['node_type'] in [ovs_const.SRC_NODE] and
                 flow_rule['egress'] == fc['logical_source_port']
             ) or (
-                flow_rule['node_type'] in [ovs_const.SRC_NODE, 'bi_node'] and
+                flow_rule['node_type'] in [ovs_const.SRC_NODE] and
                 flow_rule['ingress'] == fc['logical_destination_port']
             ):
                 fc_return.append(new_fc)
-            elif flow_rule['node_type'] in [ovs_const.SF_NODE, 'sf_bi_node']:
+            elif flow_rule['node_type'] in [ovs_const.SF_NODE]:
                 fc_return.append(new_fc)
 
         return fc_return
+
+    def _reverse_flow_rules(self, flowrule):
+
+        def _reverse_fcs(op):
+            for fc in flowrule[op]:
+                fc['logical_destination_port'], fc['logical_source_port'] = (
+                    fc['logical_source_port'], fc['logical_destination_port'])
+                fc['ldp_mac_address'], fc['lsp_mac_address'] = (
+                    fc['lsp_mac_address'], fc['ldp_mac_address'])
+                fc['destination_ip_prefix'], fc['source_ip_prefix'] = (
+                    fc['source_ip_prefix'], fc['destination_ip_prefix'])
+
+        for op in ['add_fcs', 'del_fcs']:
+            _reverse_fcs(op)
+
+        flowrule['ingress'], flowrule['egress'] = (
+                    flowrule['egress'], flowrule['ingress'])
+
+        return flowrule
 
     def _update_path_node_port_flowrules(self, node, port,
                                          add_fc_ids=None, del_fc_ids=None):
@@ -692,6 +722,11 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             port,
             add_fc_ids,
             del_fc_ids)
+
+        if flow_rule['reverse_path']:
+            if (flow_rule['node_type'] == ovs_const.SRC_NODE and flow_rule[
+                                                                'ingress']):
+                flow_rule = self._reverse_flow_rules(flow_rule)
 
         LOG.info("YYY FLOW RULES %r" % flow_rule)
         self.ovs_driver_rpc.ask_agent_to_update_flow_rules(
@@ -891,19 +926,22 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             network_type = network_info['provider:network_type']
             segment_id = network_info['provider:segmentation_id']
 
-        if network_type != np_const.TYPE_VXLAN:
-            LOG.warning(_LW("Currently only support vxlan network"))
+        if network_type not in [np_const.TYPE_VXLAN, np_const.TYPE_VLAN]:
+            LOG.warning(_LW("Currently only support vxlan and vlan networks"))
             return ((None, ) * 5)
         elif not host_id:
             LOG.warning(_LW("This port has not been binding"))
             return ((None, ) * 5)
         else:
-            driver = core_plugin.type_manager.drivers.get(network_type)
-            host_endpoint = driver.obj.get_endpoint_by_host(host_id)
-            if host_endpoint:
-                local_ip = host_endpoint['ip_address']
+            if network_type == np_const.TYPE_VXLAN:
+                driver = core_plugin.type_manager.drivers.get(network_type)
+                host_endpoint = driver.obj.get_endpoint_by_host(host_id)
+                if host_endpoint:
+                    local_ip = host_endpoint['ip_address']
+                else:
+                    local_ip = None
             else:
-                local_ip = None
+                local_ip = host_id
 
         return host_id, local_ip, network_type, segment_id, mac_address
 
