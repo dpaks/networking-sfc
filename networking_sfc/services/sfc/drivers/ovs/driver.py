@@ -408,7 +408,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         # Detect cross-subnet transit
         # Compare subnets for logical source ports
         # and first PPG ingress ports
-        for fc in self._get_fcs_by_ids(port_chain['flow_classifiers']):
+        '''for fc in self._get_fcs_by_ids(port_chain['flow_classifiers']):
             if fc['logical_source_port']:
                 subnet1 = self._get_subnet_by_port(fc['logical_source_port'])
             else:
@@ -429,7 +429,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                     if cidr1 != cidr2:
                         LOG.error(_LE('Cross-subnet chain not supported'))
                         raise exc.SfcDriverError()
-                        return None
+                        return None'''
 
         # Compare subnets for PPG egress ports
         # and next PPG ingress ports
@@ -741,7 +741,12 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             return
         for each in node['portpair_details']:
             port = self.get_port_detail_by_filter(dict(id=each))
+
             if port:
+                if node['node_type'] == ovs_const.SF_NODE:
+                    ingress, egress = self._get_ingress_egress_tap_ports(port)
+                    port.update({'ingress': ingress,
+                                 'egress': egress})
                 self._update_path_node_port_flowrules(
                     node, port, add_fc_ids, del_fc_ids)
 
@@ -945,8 +950,30 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
 
         return host_id, local_ip, network_type, segment_id, mac_address
 
+    def _get_ingress_egress_tap_ports(self, port_pair):
+        ingress_shadow_port_id = port_pair.get('ingress')
+        egress_shadow_port_id = port_pair.get('egress')
+
+        core_plugin = manager.NeutronManager.get_plugin()
+        in_shadow_pd = core_plugin.get_port(self.admin_context,
+                                            ingress_shadow_port_id)
+        eg_shadow_pd = core_plugin.get_port(self.admin_context,
+                                            egress_shadow_port_id)
+        return in_shadow_pd['device_owner'], eg_shadow_pd['device_owner']
+
+    def _get_shadow_port_segment_id(self, port):
+        core_plugin = manager.NeutronManager.get_plugin()
+        port_detail = core_plugin.get_port(self.admin_context, port)
+        network_id = port_detail['network_id']
+        network_info = core_plugin.get_network(
+            self.admin_context, network_id)
+        network_type = network_info['provider:network_type']
+        segment_id = network_info['provider:segmentation_id']
+
+        return network_type, segment_id
+
     @log_helpers.log_method_call
-    def _create_port_detail(self, port_pair):
+    def _create_port_detail(self, port_pair, is_sf=False):
         # since first node may not assign the ingress port, and last node may
         # not assign the egress port. we use one of the
         # port as the key to get the SF information.
@@ -956,11 +983,21 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         elif port_pair.get('egress', None):
             port = port_pair['egress']
 
-        host_id, local_endpoint, network_type, segment_id, mac_address = (
-            self._get_portpair_detail_info(port))
+        if not is_sf:
+            host_id, local_endpoint, network_type, segment_id, mac_address = (
+                self._get_portpair_detail_info(port))
+
+        if is_sf:
+            ingress, _ = self._get_ingress_egress_tap_ports(port_pair)
+            host_id, local_endpoint, network_type, segment_id, mac_address = (
+                self._get_portpair_detail_info(ingress))
+            network_type, segment_id = self._get_shadow_port_segment_id(port)
+
+        ingress, egress = port_pair.get('ingress'), port_pair.get('egress')
+
         port_detail = {
-            'ingress': port_pair.get('ingress', None),
-            'egress': port_pair.get('egress', None),
+            'ingress': ingress,
+            'egress': egress,
             'tenant_id': port_pair['tenant_id'],
             'host_id': host_id,
             'segment_id': segment_id,
@@ -975,7 +1012,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
     @log_helpers.log_method_call
     def create_port_pair(self, context):
         port_pair = context.current
-        self._create_port_detail(port_pair)
+        self._create_port_detail(port_pair, is_sf=True)
 
     @log_helpers.log_method_call
     def delete_port_pair(self, context):

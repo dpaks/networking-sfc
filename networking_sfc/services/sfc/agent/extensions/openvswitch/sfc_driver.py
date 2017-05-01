@@ -526,14 +526,14 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         next_hops = flowrule.get('next_hops')
         if not (group_id and next_hops):
             egress_mac = egress_port.vif_mac
-            # B6. For packets coming out of SF, we resubmit to table 12.
+            # B6. For packets coming out of SF, we resubmit to table 5.
             match_info = dict(dl_type=0x0800, **inport_match)
             actions = ("resubmit(,%s)" % ACROSS_SUBNET_TABLE)
 
             self._update_flows(ovs_consts.LOCAL_SWITCHING, 60,
                                match_info, actions, add_flow)
 
-            # B7 In table 12, we decide whether to send it locally or remotely.
+            # B7 In table 5, we decide whether to send it locally or remotely.
             for fc in flow_classifier_list:
                 ldp_port_id = fc['logical_destination_port']
                 ldp_mac = fc['ldp_mac_address']
