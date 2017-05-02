@@ -239,7 +239,7 @@ class SfcDbPlugin(
                 if fc_assoc and fc_assoc['portchain_id'] != pc_id:
                     raise ext_fc.FlowClassifierInUse(id=fc.id)
 
-            query = self._model_query(context, PortChain)
+            '''query = self._model_query(context, PortChain)
             for port_chain_db in query.all():
                 if port_chain_db['id'] == pc_id:
                     continue
@@ -260,7 +260,7 @@ class SfcDbPlugin(
                             raise ext_sfc.PortChainFlowClassifierInConflict(
                                 fc_id=fc['id'], pc_id=port_chain_db['id'],
                                 pc_fc_id=pc_fc['id']
-                            )
+                            )'''
 
     def _setup_chain_group_associations(
         self, context, port_chain, pg_ids

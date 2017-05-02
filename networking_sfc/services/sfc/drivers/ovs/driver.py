@@ -744,9 +744,8 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
 
             if port:
                 if node['node_type'] == ovs_const.SF_NODE:
-                    ingress, egress = self._get_ingress_egress_tap_ports(port)
-                    port.update({'ingress': ingress,
-                                 'egress': egress})
+                    _, egress = self._get_ingress_egress_tap_ports(port)
+                    port.update({'egress': egress})
                 self._update_path_node_port_flowrules(
                     node, port, add_fc_ids, del_fc_ids)
 
@@ -983,7 +982,10 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         elif port_pair.get('egress', None):
             port = port_pair['egress']
 
-        if not is_sf:
+        host_id, local_endpoint, network_type, segment_id, mac_address = (
+            self._get_portpair_detail_info(port))
+
+        '''if not is_sf:
             host_id, local_endpoint, network_type, segment_id, mac_address = (
                 self._get_portpair_detail_info(port))
 
@@ -992,6 +994,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             host_id, local_endpoint, network_type, segment_id, mac_address = (
                 self._get_portpair_detail_info(ingress))
             network_type, segment_id = self._get_shadow_port_segment_id(port)
+            '''
 
         ingress, egress = port_pair.get('ingress'), port_pair.get('egress')
 
