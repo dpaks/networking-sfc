@@ -409,8 +409,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                                                             INGRESS_TABLE))
                 else:
                     # same subnet with next hop
-                    subnet_actions = "mod_vlan_vid:%d, output:%s" % (
-                        local_vlan, self.patch_tun_ofport)
+                    subnet_actions = "output:%s" % self.patch_tun_ofport
                 subnet_actions_list.append(subnet_actions)
 
                 self.br_int.add_flow(
@@ -515,7 +514,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         inport_match = {}
         priority = 50
         global_vlan_tag = flowrule['segment_id']
-        local_vlan_tag = self._get_vlan_by_port(flowrule['ingress'])
+        local_vlan_tag = self._get_vlan_by_port(flowrule['egress'])
 
         if match_inport is True:
             egress_port = self.br_int.get_vif_port_by_id(flowrule['egress'])
@@ -525,6 +524,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         group_id = flowrule.get('next_group_id')
         next_hops = flowrule.get('next_hops')
         if not (group_id and next_hops):
+            local_vlan_tag = self._get_vlan_by_port(flowrule['ingress'])
             egress_mac = egress_port.vif_mac
             # B6. For packets coming out of SF, we resubmit to table 5.
             match_info = dict(dl_type=0x0800, **inport_match)
@@ -563,9 +563,9 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         # A1. Flow inserted at LSP egress. Matches on ip, in_port and LDP IP.
         # Action is redirect to group.
         ldp_mac = flow_classifier_list[0]['ldp_mac_address']
-        actions = ("group:%d" % (group_id))
-        '''actions = ("mod_vlan_vid:%s, group:%d" % (
-                                global_vlan_tag, group_id))'''
+        '''actions = ("group:%d" % (group_id))'''
+        actions = ("mod_vlan_vid:%s, group:%d" % (
+                                local_vlan_tag, group_id))
         # TODO(dpak): Uncomment the following once we have a vlan enabled setup
         '''match_info = dict(inport_match, **{'dl_dst': ldp_mac,
                                            'dl_type': '0x0800',
