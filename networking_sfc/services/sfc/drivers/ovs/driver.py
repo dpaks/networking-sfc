@@ -511,6 +511,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             sf_node = self.create_path_node(node_args)
             LOG.debug('chain path node: %s', sf_node)
 
+            # If Src Node is bi, then SF node shall naturally be bi.
             if is_bi_node:
                 sf_node.update(dict(reverse_path=True))
             else:
@@ -544,6 +545,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
                                                                 'ingress']):
                 flow_rule = self._reverse_flow_rules(flow_rule)
 
+        LOG.info("ZZZ FLOW RULES %r" % flow_rule)
         self.ovs_driver_rpc.ask_agent_to_delete_flow_rules(
             self.admin_context,
             flow_rule)
@@ -556,6 +558,9 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         for each in node['portpair_details']:
             port = self.get_port_detail_by_filter(dict(id=each))
             if port:
+                if node['node_type'] == ovs_const.SF_NODE:
+                    _, egress = self._get_ingress_egress_tap_ports(port)
+                    port.update({'egress': egress})
                 self._delete_path_node_port_flowrule(
                     node, port, fc_ids)
 
@@ -567,7 +572,10 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         is_bi_node = False
         if pds:
             for pd in pds:
-                is_bi_node = self._check_if_bi_node(pd)
+                # If Src Node is bi, then SF node shall naturally be bi. Here,
+                # we assume that Src node will be the first in 'pds'.
+                if self._check_if_bi_node(pd):
+                    is_bi_node = True
                 if is_bi_node:
                     pd.update(dict(reverse_path=True))
                 else:
