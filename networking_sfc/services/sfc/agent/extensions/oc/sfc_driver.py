@@ -578,7 +578,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 # vlan matches, then resubmit to 10.
                 # This is per ldp because ldps can have different vlan tags.
                 match_info = dict(
-                    dl_type=0x0800, in_port=self.patch_tun_ofport,
+                    dl_type=0x0800,
                     dl_vlan=global_vlan_tag, dl_dst=ingress_mac)
                 actions = ("resubmit(,%s)" % INGRESS_TABLE)
                 self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,

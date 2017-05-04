@@ -957,8 +957,7 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             else:
                 local_ip = host_id
 
-        return (host_id, local_ip, network_type,
-                segment_id, mac_address, network_id)
+        return host_id, local_ip, network_type, segment_id, mac_address
 
     def _get_ingress_egress_tap_ports(self, port_pair):
         ingress_shadow_port_id = port_pair.get('ingress')
@@ -970,17 +969,6 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         eg_shadow_pd = core_plugin.get_port(self.admin_context,
                                             egress_shadow_port_id)
         return in_shadow_pd['device_owner'], eg_shadow_pd['device_owner']
-
-    def _get_shadow_port_segment_id(self, port):
-        core_plugin = manager.NeutronManager.get_plugin()
-        port_detail = core_plugin.get_port(self.admin_context, port)
-        network_id = port_detail['network_id']
-        network_info = core_plugin.get_network(
-            self.admin_context, network_id)
-        network_type = network_info['provider:network_type']
-        segment_id = network_info['provider:segmentation_id']
-
-        return network_type, segment_id
 
     def _get_segmentation_id(self, network_id):
         session = db_api.get_session()
@@ -1001,23 +989,8 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         elif port_pair.get('egress', None):
             port = port_pair['egress']
 
-        (host_id, local_endpoint, network_type,
-         segment_id, mac_address, network_id) = (
+        host_id, local_endpoint, network_type, segment_id, mac_address = (
             self._get_portpair_detail_info(port))
-
-        if network_type == np_const.TYPE_VXLAN:
-            segment_id = self._get_segmentation_id(network_id)
-
-        '''if not is_sf:
-            host_id, local_endpoint, network_type, segment_id, mac_address = (
-                self._get_portpair_detail_info(port))
-
-        if is_sf:
-            ingress, _ = self._get_ingress_egress_tap_ports(port_pair)
-            host_id, local_endpoint, network_type, segment_id, mac_address = (
-                self._get_portpair_detail_info(ingress))
-            network_type, segment_id = self._get_shadow_port_segment_id(port)
-            '''
 
         ingress, egress = port_pair.get('ingress'), port_pair.get('egress')
 
