@@ -167,11 +167,11 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
             if flowrule.get('reverse_path'):
                 rev_flowrule = self._reverse_flow_rules(flowrule, node_type)
                 if (flowrule['ingress'] is not None or (
-                                        node_type == ovs_consts.SF_NODE)):
+                                        node_type == 'sf_node')):
                     self._setup_source_based_flows(
                         rev_flowrule, rev_flowrule['del_fcs'], add_flow=False)
                 if (flowrule['egress'] is not None or (
-                                        node_type == ovs_consts.SF_NODE)):
+                                        node_type == 'sf_node')):
                     self._setup_destination_based_forwarding(
                             rev_flowrule, rev_flowrule['del_fcs'],
                             add_flow=False)
@@ -198,7 +198,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         for op in ['add_fcs', 'del_fcs']:
             _reverse_fcs(op)
 
-        if node_type == ovs_consts.SRC_NODE:
+        if node_type == 'src_node':
             rev_flowrule['ingress'], rev_flowrule['egress'] = (
                         rev_flowrule['egress'], rev_flowrule['ingress'])
 
