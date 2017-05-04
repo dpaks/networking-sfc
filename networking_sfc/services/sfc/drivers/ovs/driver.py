@@ -22,6 +22,7 @@ from neutron.common import constants as nc_const
 from neutron.common import rpc as n_rpc
 from neutron import context as n_context
 from neutron.db import api as db_api
+from neutron.db import segments_db as seg_db
 from neutron import manager
 
 from neutron.plugins.common import constants as np_const
@@ -569,13 +570,14 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         pds = self.get_path_nodes_by_filter(
             dict(portchain_id=port_chain['id']))
         src_node = None
-        is_bi_node = False
+        is_bi_node = True
         if pds:
             for pd in pds:
+                ''' We cannot assume that Src node always comes first.
                 # If Src Node is bi, then SF node shall naturally be bi. Here,
                 # we assume that Src node will be the first in 'pds'.
                 if self._check_if_bi_node(pd):
-                    is_bi_node = True
+                    is_bi_node = True'''
                 if is_bi_node:
                     pd.update(dict(reverse_path=True))
                 else:
@@ -955,7 +957,8 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
             else:
                 local_ip = host_id
 
-        return host_id, local_ip, network_type, segment_id, mac_address
+        return (host_id, local_ip, network_type,
+                segment_id, mac_address, network_id)
 
     def _get_ingress_egress_tap_ports(self, port_pair):
         ingress_shadow_port_id = port_pair.get('ingress')
@@ -979,6 +982,14 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
 
         return network_type, segment_id
 
+    def _get_segmentation_id(self, network_id):
+        session = db_api.get_session()
+        nw_seg_data = seg_db.get_network_segments(session, network_id)
+
+        for each in nw_seg_data:
+            if each['network_type'] == np_const.TYPE_VLAN:
+                return each['segmentation_id']
+
     @log_helpers.log_method_call
     def _create_port_detail(self, port_pair, is_sf=False):
         # since first node may not assign the ingress port, and last node may
@@ -990,8 +1001,12 @@ class OVSSfcDriver(driver_base.SfcDriverBase,
         elif port_pair.get('egress', None):
             port = port_pair['egress']
 
-        host_id, local_endpoint, network_type, segment_id, mac_address = (
+        (host_id, local_endpoint, network_type,
+         segment_id, mac_address, network_id) = (
             self._get_portpair_detail_info(port))
+
+        if network_type == np_const.TYPE_VXLAN:
+            segment_id = self._get_segmentation_id(network_id)
 
         '''if not is_sf:
             host_id, local_endpoint, network_type, segment_id, mac_address = (

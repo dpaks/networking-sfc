@@ -166,10 +166,12 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                     )
             if flowrule.get('reverse_path'):
                 rev_flowrule = self._reverse_flow_rules(flowrule, node_type)
-                if flowrule['ingress'] is not None:
+                if (flowrule['ingress'] is not None or (
+                                        node_type == ovs_consts.SF_NODE)):
                     self._setup_source_based_flows(
                         rev_flowrule, rev_flowrule['del_fcs'], add_flow=False)
-                else:
+                if (flowrule['egress'] is not None or (
+                                        node_type == ovs_consts.SF_NODE)):
                     self._setup_destination_based_forwarding(
                             rev_flowrule, rev_flowrule['del_fcs'],
                             add_flow=False)
@@ -196,7 +198,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         for op in ['add_fcs', 'del_fcs']:
             _reverse_fcs(op)
 
-        if node_type == 'src_node':
+        if node_type == ovs_consts.SRC_NODE:
             rev_flowrule['ingress'], rev_flowrule['egress'] = (
                         rev_flowrule['egress'], rev_flowrule['ingress'])
 
@@ -557,8 +559,8 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
         group_id = flowrule.get('next_group_id')
         next_hops = flowrule.get('next_hops')
         if not (group_id and next_hops):
-            # B5. At ingress of SF, modify dest mac to that of Dest VM's
-            # if nw_dst belongs to Dest VM and output to ingress port of SF.
+            # B5. At ingress of SF, if dl_dst belongs to SF and nw_dst
+            # belongs to Dest VM, output to ingress port of SF.
             for fc in flow_classifier_list:
                 ldp_mac = fc['ldp_mac_address']
                 dst_ip = fc['destination_ip_prefix']
