@@ -94,9 +94,8 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
 
         self.local_ip = cfg.CONF.OVS.local_ip
         self.local_host = cfg.CONF.OVS.local_hostname
-        '''self.patch_tun_ofport = self.br_int.get_port_ofport(
-            cfg.CONF.OVS.int_peer_patch_port)'''
-        self.patch_tun_ofport = self.br_int.get_port_ofport("int-br-vlan")
+        self.patch_tun_ofport = self.br_int.get_port_ofport(
+            cfg.CONF.OVS.int_peer_patch_port)
         self.vlan_manager = vlanmanager.LocalVlanManager()
 
         self._clear_sfc_flow_on_int_br()
