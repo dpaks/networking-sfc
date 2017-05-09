@@ -40,14 +40,17 @@ class OVSFlowClassifierDriver(fc_driver.FlowClassifierDriverBase):
     def create_flow_classifier_precommit(self, context):
         """OVS Driver precommit before transaction committed.
 
-        Make sure that either the logical_source_port
-        or the logical_destination_port is not None.
+        Make sure the logical_source_port is not None.
+        Make sure the logical_destination_port is None.
         """
-
         flow_classifier = context.current
         logical_source_port = flow_classifier['logical_source_port']
-        logical_destination_port = flow_classifier['logical_destination_port']
-        if (logical_source_port or logical_destination_port) is None:
+        if logical_source_port is None:
             raise exc.FlowClassifierBadRequest(message=(
-                'FlowClassifier %s requires either logical destination port or'
-                ' logical source port in ovs driver' % flow_classifier['id']))
+                'FlowClassifier %s does not set '
+                'logical source port in ovs driver' % flow_classifier['id']))
+        logical_destination_port = flow_classifier['logical_destination_port']
+        if logical_destination_port is not None:
+            raise exc.FlowClassifierBadRequest(message=(
+                'FlowClassifier %s sets logical destination port '
+                'in ovs driver' % flow_classifier['id']))
