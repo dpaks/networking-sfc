@@ -24,7 +24,6 @@ from neutron.plugins.ml2.drivers.openvswitch.agent.common import constants \
 from neutron.plugins.ml2.drivers.openvswitch.agent import vlanmanager
 
 from networking_sfc._i18n import _LE
-from networking_sfc.services.sfc.agent.extensions import sfc
 from networking_sfc.services.sfc.common import ovs_ext_lib
 from networking_sfc.services.sfc.agent.extensions.openvswitch import sfc_driver
 from networking_sfc.services.sfc.drivers.ovs import constants
@@ -81,7 +80,6 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
     def __init__(self):
         super(SfcOCAgentDriver, self).__init__()
         self.ovs_sfc_dvr = sfc_driver.SfcOVSAgentDriver()
-        self.local_host = None
 
     def consume_api(self, agent_api):
         self.agent_api = agent_api
@@ -92,11 +90,11 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
         self.br_int.set_protocols(SfcOCAgentDriver.REQUIRED_PROTOCOLS)
 
         self.local_ip = cfg.CONF.OVS.local_ip
+        self.phy_patch_ofport = self.br_int.get_port_ofport(
+                                            cfg.CONF.OVS.phy_patch_ofport)
         self.vlan_manager = vlanmanager.LocalVlanManager()
 
         self._clear_sfc_flow_on_int_br()
-        self.phy_patch_ofport = self.br_int.get_port_ofport(
-                                            cfg.CONF.OVS.phy_patch_ofport)
 
     def update_flow_rules(self, flowrule, flowrule_status):
         try:
@@ -236,7 +234,7 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
                 subnet_actions_list = []
 
                 priority = 30
-                if item['local_endpoint'] == self.local_host:
+                if item['local_endpoint'] == flowrule['host']:
                     subnet_actions = (
                         "mod_vlan_vid:%d, resubmit(,%d)" % (global_vlan_tag,
                                                             INGRESS_TABLE))
@@ -393,8 +391,6 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
             # B5. At ingress of SF, if dl_dst belongs to SF and nw_dst
             # belongs to Dest VM, output to ingress port of SF.
             for fc in flow_classifier_list:
-                dst_ip = fc['destination_ip_prefix']
-
                 match_info = dict(dl_type=0x0800,
                                   dl_vlan=global_vlan_tag,
                                   dl_dst=ingress_mac)

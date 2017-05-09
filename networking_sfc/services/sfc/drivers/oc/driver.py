@@ -524,17 +524,6 @@ class OCSfcDriver(sfc_dvr.OVSSfcDriver):
                                             egress_shadow_port_id)
         return in_shadow_pd['device_owner'], eg_shadow_pd['device_owner']
 
-    def _get_shadow_port_segment_id(self, port):
-        core_plugin = manager.NeutronManager.get_plugin()
-        port_detail = core_plugin.get_port(self.admin_context, port)
-        network_id = port_detail['network_id']
-        network_info = core_plugin.get_network(
-            self.admin_context, network_id)
-        network_type = network_info['provider:network_type']
-        segment_id = network_info['provider:segmentation_id']
-
-        return network_type, segment_id
-
     @log_helpers.log_method_call
     def _create_port_detail(self, port_pair):
         # since first node may not assign the ingress port, and last node may
