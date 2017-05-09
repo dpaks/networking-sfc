@@ -53,7 +53,10 @@ PC_INGRESS_PRI = 30
 
 sfc_ovs_opt = [
         cfg.StrOpt('local_hostname',
-                   default='', help='Hostname of the local machine')]
+                   default='', help='Hostname of the local machine'),
+        cfg.StrOpt('phy_patch_ofport',
+                   default='', help='Patch port of integration bridge '
+                                    'to tun/vlan bridge.')]
 cfg.CONF.register_opts(sfc_ovs_opt, 'OVS')
 
 
@@ -81,7 +84,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
 
         self.local_ip = None
         self.local_host = None
-        self.patch_tun_ofport = None
+        self.phy_patch_ofport = None
         self.vlan_manager = None
 
     def consume_api(self, agent_api):
@@ -94,8 +97,8 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
 
         self.local_ip = cfg.CONF.OVS.local_ip
         self.local_host = cfg.CONF.OVS.local_hostname
-        self.patch_tun_ofport = self.br_int.get_port_ofport(
-            cfg.CONF.OVS.int_peer_patch_port)
+        self.phy_patch_ofport = self.br_int.get_port_ofport(
+                                            cfg.CONF.OVS.phy_patch_ofport)
         self.vlan_manager = vlanmanager.LocalVlanManager()
 
         self._clear_sfc_flow_on_int_br()
@@ -407,7 +410,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                                                             INGRESS_TABLE))
                 else:
                     # same subnet with next hop
-                    subnet_actions = "output:%s" % self.patch_tun_ofport
+                    subnet_actions = "output:%s" % self.phy_patch_ofport
                 subnet_actions_list.append(subnet_actions)
 
                 self.br_int.add_flow(
@@ -496,7 +499,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                     actions = ("mod_vlan_vid:%s, mod_dl_src:%s, "
                                "mod_dl_dst:%s, output:%s" % (
                                    (local_vlan_tag, egress_mac,
-                                    ldp_mac, self.patch_tun_ofport)))
+                                    ldp_mac, self.phy_patch_ofport)))
 
                 match_info = dict(nw_dst=fc['destination_ip_prefix'],
                                   dl_dst=ingress_mac,
@@ -566,8 +569,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
 
                 match_info = dict(dl_type=0x0800,
                                   dl_vlan=global_vlan_tag,
-                                  dl_dst=ingress_mac,
-                                  nw_dst=dst_ip)
+                                  dl_dst=ingress_mac)
                 actions = ("strip_vlan, output:%s" % (ingress_ofport))
 
                 self._update_flows(INGRESS_TABLE, 60,
@@ -577,7 +579,7 @@ class SfcOVSAgentDriver(sfc.SfcAgentDriver):
                 # vlan matches, then resubmit to 10.
                 # This is per ldp because ldps can have different vlan tags.
                 match_info = dict(
-                    dl_type=0x0800, in_port=self.patch_tun_ofport,
+                    dl_type=0x0800, in_port=self.phy_patch_ofport,
                     dl_vlan=global_vlan_tag, dl_dst=ingress_mac)
                 actions = ("resubmit(,%s)" % INGRESS_TABLE)
                 self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
