@@ -73,18 +73,15 @@ if [ "$operation" == "create" ]; then
     openstack network trunk create --parent-port $p1_id trunk1
     
     echo "Launching VNF on Node $sf_compute..."
-    openstack server delete VNF
     nova boot --image $sf_image --flavor 3 --nic port-id=$p1_id\
      --nic port-id=$p2_id --availability-zone nova:$sf_compute VNF
     
     sleep 5
     
-    echo "Launching Attacker on Node $c1_compute..."
-    openstack server delete Attacker
-    nova boot --image $client_image --flavor 2 --nic port-id=$c1_id  --availability-zone nova:$c1_compute Attacker
-    echo "Launching InspectedVM on Node $c2_compute..."
-    openstack server delete InspectedVM
-    nova boot --image $client_image --flavor 2 --nic port-id=$c2_id  --availability-zone nova:$c2_compute InspectedVM
+    echo "Launching Client on Node $c1_compute..."
+    nova boot --image $client_image --flavor 2 --nic port-id=$c1_id  --availability-zone nova:$c1_compute Client
+    echo "Launching Server on Node $c2_compute..."
+    nova boot --image $client_image --flavor 2 --nic port-id=$c2_id  --availability-zone nova:$c2_compute Server
     
     sleep 5
     
@@ -94,12 +91,11 @@ if [ "$operation" == "create" ]; then
     s1_id=`openstack port list -f value | grep " s1 " | awk '{print $1}'`
     seg_id=`openstack network show inspected_net | grep segmentation_id | awk '{print $4}'`
     
-    openstack port create --network inspected_net --device $vnf_id\
-     --device-owner $p2_id --mac-address $p2_mac s2
+    openstack port create --network inspected_net --device $p2_id --mac-address $p2_mac s2
     
     openstack network trunk set --subport port=$s1_id,segmentation-type=vlan,segmentation-id=$seg_id trunk1
     
-    openstack port set --device $vnf_id s1
+    openstack port set --device $p1_id s1
     
     sleep 3
     
@@ -123,10 +119,11 @@ else
     openstack port pair group delete ppg1
     openstack port pair delete pp1
     
-    openstack server delete Attacker InspectedVM VNF
-    
     s1_id=`openstack port list -f value | grep " s1 " | awk '{print $1}'`
     openstack network trunk unset --subport $s1_id trunk1
+    
+    openstack server delete Client Server VNF
+
     openstack network trunk delete trunk1
      
     openstack port delete s1 s2 c1 c2 p1 p2
@@ -136,13 +133,3 @@ else
     openstack router delete sfc-router
     openstack network delete inspected_net inspection_net 
 fi
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    

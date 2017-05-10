@@ -431,10 +431,10 @@ class SfcDbPlugin(
             raise ext_sfc.PortPairEgressNoHost(
                 egress=egress['id']
             )
-        if ingress['device_id'] != egress['device_id']:
+        '''if ingress['device_id'] != egress['device_id']:
             raise ext_sfc.PortPairIngressEgressDifferentHost(
                 ingress=ingress['id'],
-                egress=egress['id'])
+                egress=egress['id'])'''
 
     @log_helpers.log_method_call
     def create_port_pair(self, context, port_pair):

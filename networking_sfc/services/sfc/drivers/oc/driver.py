@@ -522,7 +522,7 @@ class OCSfcDriver(sfc_dvr.OVSSfcDriver):
                                             ingress_shadow_port_id)
         eg_shadow_pd = core_plugin.get_port(self.admin_context,
                                             egress_shadow_port_id)
-        return in_shadow_pd['device_owner'], eg_shadow_pd['device_owner']
+        return in_shadow_pd['device_id'], eg_shadow_pd['device_id']
 
     @log_helpers.log_method_call
     def _create_port_detail(self, port_pair):
