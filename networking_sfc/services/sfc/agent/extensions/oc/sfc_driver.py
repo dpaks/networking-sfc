@@ -303,7 +303,6 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
         next_hops = flowrule.get('next_hops')
         if not (group_id and next_hops):
             local_vlan_tag = self._get_vlan_by_port(flowrule['ingress'])
-            egress_mac = egress_port.vif_mac
             # B6. For packets coming out of SF, we resubmit to table 5.
             match_info = dict(dl_type=0x0800, **inport_match)
             actions = ("resubmit(,%s)" % ACROSS_SUBNET_TABLE)
@@ -326,7 +325,7 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
                 else:
                     actions = ("mod_vlan_vid:%s, mod_dl_src:%s, "
                                "mod_dl_dst:%s, output:%s" % (
-                                   (local_vlan_tag, egress_mac,
+                                   (local_vlan_tag, ingress_mac,
                                     ldp_mac, self.phy_patch_ofport)))
 
                 match_info = dict(nw_dst=fc['destination_ip_prefix'],
@@ -390,24 +389,23 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
         if not (group_id and next_hops):
             # B5. At ingress of SF, if dl_dst belongs to SF and nw_dst
             # belongs to Dest VM, output to ingress port of SF.
-            for fc in flow_classifier_list:
-                match_info = dict(dl_type=0x0800,
-                                  dl_vlan=global_vlan_tag,
-                                  dl_dst=ingress_mac)
-                actions = ("strip_vlan, output:%s" % (ingress_ofport))
+            match_info = dict(dl_type=0x0800,
+                              dl_vlan=global_vlan_tag,
+                              dl_dst=ingress_mac)
+            actions = ("strip_vlan, output:%s" % (ingress_ofport))
 
-                self._update_flows(INGRESS_TABLE, 60,
-                                   match_info, actions, add_flow)
+            self._update_flows(INGRESS_TABLE, 60,
+                               match_info, actions, add_flow)
 
-                # B4. At ingress of SF, if dest mac matches with SF ingress,
-                # vlan matches, then resubmit to 10.
-                # This is per ldp because ldps can have different vlan tags.
-                match_info = dict(
-                    dl_type=0x0800, in_port=self.phy_patch_ofport,
-                    dl_vlan=global_vlan_tag, dl_dst=ingress_mac)
-                actions = ("resubmit(,%s)" % INGRESS_TABLE)
-                self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
-                                   match_info, actions, add_flow)
+            # B4. At ingress of SF, if dest mac matches with SF ingress,
+            # vlan matches, then resubmit to 10.
+            # This is per ldp because ldps can have different vlan tags.
+            match_info = dict(
+                dl_type=0x0800, in_port=self.phy_patch_ofport,
+                dl_vlan=global_vlan_tag, dl_dst=ingress_mac)
+            actions = ("resubmit(,%s)" % INGRESS_TABLE)
+            self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
+                               match_info, actions, add_flow)
             return
 
         # B9. Match IP packets with vlan and source IP. Actions will be to
