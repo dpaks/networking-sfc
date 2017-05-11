@@ -229,7 +229,7 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
                     )
                 )
                 buckets.append(bucket)
-                # A3 In table 5, add MPLS header and send to either patch port
+                # A3 In table 5, send to either patch port
                 # or table 10 for remote and local node respectively.
                 subnet_actions_list = []
 
@@ -339,13 +339,14 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
 
         # A1. Flow inserted at LSP egress. Matches on ip, in_port and LDP IP.
         # Action is redirect to group.
-        ldp_mac = flow_classifier_list[0]['ldp_mac_address']
-        actions = ("mod_vlan_vid:%s, group:%d" % (
-                                local_vlan_tag, group_id))
-        match_info = dict(inport_match, **{'dl_dst': ldp_mac,
-                                           'dl_type': '0x0800'})
-        self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
-                           match_info, actions, add_flow)
+        for fc in flow_classifier_list:
+            ldp_mac = fc['ldp_mac_address']
+            actions = ("mod_vlan_vid:%s, group:%d" % (
+                                    local_vlan_tag, group_id))
+            match_info = dict(inport_match, **{'dl_dst': ldp_mac,
+                                               'dl_type': '0x0800'})
+            self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
+                               match_info, actions, add_flow)
 
     def _get_port_info(self, port_id, info_type):
         ''' Returns specific port info
@@ -410,31 +411,33 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
 
         # B9. Match IP packets with vlan and source IP. Actions will be to
         # strip vlan and modify src MAC and output to Dest VM port.
-        nw_src = flow_classifier_list[0]['source_ip_prefix']
+        for fc in flow_classifier_list:
+            nw_src = fc['source_ip_prefix']
+    
+            src_port_mac = fc['lsp_mac_address']
+            actions = ('strip_vlan, mod_dl_src:%s, output:%s' % (
+                                                src_port_mac, ingress_ofport))
+    
+            match_field = dict(
+                dl_type=0x0800,
+                dl_vlan=global_vlan_tag,
+                dl_dst=ingress_mac,
+                nw_src=nw_src)
+    
+            self._update_flows(10, priority,
+                               match_field, actions, add_flow)
 
-        src_port_mac = flow_classifier_list[0]['lsp_mac_address']
-        actions = ('strip_vlan, mod_dl_src:%s, output:%s' % (
-                                            src_port_mac, ingress_ofport))
-
-        match_field = dict(
-            dl_type=0x0800,
-            dl_vlan=global_vlan_tag,
-            dl_dst=ingress_mac,
-            nw_src=nw_src)
-
-        self._update_flows(10, priority,
-                           match_field, actions, add_flow)
-
-        # B8. At ingress of dest, match ip packet with vlan tag and dest
-        # MAC address. Action will be to resubmit to 10.
-        match_field = dict(
-            dl_type=0x0800,
-            dl_vlan=global_vlan_tag,
-            dl_dst=ingress_mac)
-        actions = ("resubmit(,%s)" % 10)
-
-        self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
-                           match_field, actions, add_flow)
+            # B8. At ingress of dest, match ip packet with vlan tag and dest
+            # MAC address. Action will be to resubmit to 10.
+            match_field = dict(
+                dl_type=0x0800,
+                dl_vlan=global_vlan_tag,
+                dl_dst=ingress_mac,
+                nw_src=nw_src)
+            actions = ("resubmit(,%s)" % 10)
+    
+            self._update_flows(ovs_consts.LOCAL_SWITCHING, priority,
+                               match_field, actions, add_flow)
 
     def _setup_ingress_flow_rules(self, flowrule):
         flow_classifier_list = flowrule['add_fcs']
