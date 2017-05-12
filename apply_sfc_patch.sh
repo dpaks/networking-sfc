@@ -11,19 +11,28 @@ Usage () {
         echo -e "applied ONLY on top of sfc rpm with version $VERSION.\n"
 }
 
-# diff -Nur -x "*.py?" networking_sfc/db/ Projects/networking-sfc/networking_sfc/db/ > sfc_db-3.0.1.patch
-# diff -Nur -x "*.py?" networking_sfc/services/sfc/agent/extensions/oc Projects/networking-sfc/networking_sfc/services/sfc/agent/extensions/oc > sfc_agent-3.0.1.patch
-# 
+# diff -u networking_sfc.rpm/db/sfc_db.py networking_sfc/db/sfc_db.py > sfc_db-3.0.1.patch
+# diff -u networking_sfc.rpm/db/flowclassifier_db.py networking_sfc/db/flowclassifier_db.py >> sfc_db-3.0.1.patch
+# diff -Naur -x "*.py?" networking_sfc.rpm/services/sfc/agent/extensions/oc/ networking_sfc/services/sfc/agent/extensions/oc/ > sfc_agent-3.0.1.patch
+# diff -Nau networking_sfc.rpm/services/sfc/drivers/oc/ networking_sfc/services/sfc/drivers/oc/ > sfc_plugin-3.0.1.patch
+# diff -Nau networking_sfc.rpm/services/flowclassifier/drivers/oc/ networking_sfc/services/flowclassifier/drivers/oc/ >> sfc_plugin-3.0.1.patch
 
 function backup_files_to_be_modifed(){
     echo "Backing up files that are to be modified while patching with $1."
-    if [[ $1 == "sfc_db.patch" ]]; then
+    if [[ $1 == "sfc_db-$VERSION.patch" ]]; then
         cp $PYTHON_MODULE_PATH/networking_sfc/db/sfc_db.py $PYTHON_MODULE_PATH/networking_sfc/db/sfc_db.py.bk
         cp $PYTHON_MODULE_PATH/networking_sfc/db/flowclassifier_db.py $PYTHON_MODULE_PATH/networking_sfc/db/flowclassifier_db.py.bk
-    elif [[ $1 == "sfc_agent.patch" ]]; then
-        cp $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc/sfc_driver.py $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc/sfc_driver.py.bk
-    elif [[ $1 == "sfc_plugin.patch" ]]; then
-        cp $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc/driver.py $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc/driver.py.bk
+    elif [[ $1 == "sfc_agent-$VERSION.patch" ]]; then
+        mkdir -p $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc
+        cp $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc/sfc_driver.py $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc/sfc_driver.py.bk 2>/dev/null
+        touch $PYTHON_MODULE_PATH/networking_sfc/services/sfc/agent/extensions/oc/__init__.py
+    elif [[ $1 == "sfc_plugin-$VERSION.patch" ]]; then
+        mkdir -p $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc
+        mkdir -p $PYTHON_MODULE_PATH/networking_sfc/services/flowclassifier/drivers/oc
+        cp $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc/driver.py $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc/driver.py.bk 2>/dev/null
+        cp $PYTHON_MODULE_PATH/networking_sfc/services/flowclassifier/drivers/oc/driver.py $PYTHON_MODULE_PATH/networking_sfc/services/flowclassifier/drivers/oc/driver.py.bk 2>/dev/null
+        touch $PYTHON_MODULE_PATH/networking_sfc/services/sfc/drivers/oc/__init__.py
+        touch $PYTHON_MODULE_PATH/networking_sfc/services/flowclassifier/drivers/oc/__init__.py
     else
         :
     fi
@@ -64,9 +73,9 @@ function check_for_sfc(){
 }
 
 function copy_sfc_patches(){
-    cp $PATCH_PATH/sfc/sfc_plugin.patch $PYTHON_MODULE_PATH/.
-    cp $PATCH_PATH/sfc/sfc_agent.patch $PYTHON_MODULE_PATH/.
-    cp $PATCH_PATH/sfc/sfc_db.patch $PYTHON_MODULE_PATH/.
+    cp $PATCH_PATH/sfc-patches/sfc_plugin-$VERSION.patch $PYTHON_MODULE_PATH/.
+    cp $PATCH_PATH/sfc-patches/sfc_agent-$VERSION.patch $PYTHON_MODULE_PATH/.
+    cp $PATCH_PATH/sfc-patches/sfc_db-$VERSION.patch $PYTHON_MODULE_PATH/.
 }
 
 function configure_sfc(){
@@ -87,10 +96,17 @@ function configure_sfc(){
     systemctl restart neutron-openvswitch-agent.service
 }
 
+function cleanup(){
+    rm -f $PYTHON_MODULE_PATH/sfc_agent-$VERSION.patch
+    rm -f $PYTHON_MODULE_PATH/sfc_plugin-$VERSION.patch
+    rm -f $PYTHON_MODULE_PATH/sfc_db-$VERSION.patch
+}
+
 function install_patch(){
     check_for_sfc
     copy_sfc_patches
     apply_patches
+    cleanup
     configure_sfc
 }
 
