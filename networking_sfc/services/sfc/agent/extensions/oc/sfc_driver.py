@@ -131,10 +131,11 @@ class SfcOCAgentDriver(sfc_driver.SfcOVSAgentDriver):
                 group_id = flowrule.get('next_group_id', None)
                 if group_id and flowrule.get('group_refcnt', None) <= 1:
                     self.br_int.delete_group(group_id=group_id)
-                    for item in flowrule['next_hops']:
-                        self.br_int.delete_flows(
-                            table=ACROSS_SUBNET_TABLE,
-                            dl_dst=item['mac_address'])
+                # Note(dpak): Check for repercussions. Loop previously depended on grp_rfcnt
+                for item in flowrule['next_hops']:
+                    self.br_int.delete_flows(
+                        table=ACROSS_SUBNET_TABLE,
+                        dl_dst=item['mac_address'])
 
             if flowrule['ingress'] is not None:
                 self._setup_destination_based_flows(flowrule,
