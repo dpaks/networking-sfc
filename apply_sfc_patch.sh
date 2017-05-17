@@ -6,7 +6,7 @@ PATCH_PATH=$1
 PATCH_PORT=$2
 
 Usage () {
-        echo -e "\n\nUsage: apply_sfc_patch.sh <path to directory containing patches> <br-int patch port>\n"
+        echo -e "\n\nUsage: apply_sfc_patch.sh <path to 'sfc-patches' directory containing patches> <br-int patch port>\n"
         echo -e "\nThe patch SHOULD belong to version $VERSION and should be "
         echo -e "applied ONLY on top of sfc rpm with version $VERSION.\n"
 }
@@ -84,12 +84,12 @@ function configure_sfc(){
     EGG_FILE="/usr/lib/python2.7/site-packages/networking_sfc-*egg*/entry_points.txt"
     crudini --set --verbose $NEUTRON_CONF sfc drivers oc
     crudini --set --verbose $NEUTRON_CONF flowclassifier drivers oc
-    if [[ `crudini --get neutron.conf DEFAULT service_plugins` != *"trunk"* ]]; then
-        crudini --set --verbose $NEUTRON_CONF DEFAULT service_plugins `crudini --get neutron.conf DEFAULT service_plugins`,trunk
+    if [[ `crudini --get $NEUTRON_CONF DEFAULT service_plugins` != *"trunk"* ]]; then
+        crudini --set --verbose $NEUTRON_CONF DEFAULT service_plugins `crudini --get $NEUTRON_CONF DEFAULT service_plugins`,trunk
     fi
     crudini --set --verbose $OVS_INI ovs phy_patch_ofport $PATCH_PORT
     crudini --set --verbose $EGG_FILE networking_sfc.flowclassifier.drivers oc networking_sfc.services.flowclassifier.drivers.oc.driver:OCFlowClassifierDriver
-    crudini --set --verbose $EGG_FILE networking_sfc.sfc.agent_drivers oc networking_sfc.services.sfc.agent.extensions.oc.sfc_driver:SfcOCAgentDriver
+    crudini --set --verbose $EGG_FILE networking_sfc.sfc.agent_drivers ovs networking_sfc.services.sfc.agent.extensions.oc.sfc_driver:SfcOCAgentDriver
     crudini --set --verbose $EGG_FILE networking_sfc.sfc.drivers oc networking_sfc.services.sfc.drivers.oc.driver:OCSfcDriver
     
     systemctl restart neutron-server.service
@@ -123,6 +123,6 @@ if [[ -z $PATCH_PORT ]]; then
     exit 1
 fi
 
-PYTHON_MODULE_PATH="/usr/lib/python2.7/dist-packages"
+PYTHON_MODULE_PATH="/usr/lib/python2.7/site-packages"
 PATCH_ARRAY=("sfc_agent-$VERSION.patch" "sfc_plugin-$VERSION.patch" "sfc_db-$VERSION.patch")
 install_patch
